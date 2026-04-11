@@ -1,0 +1,9 @@
+.env.local
+
+# Ignore the steps directory (documentation/notes not for VCS)
+apps/backend/steps/
+
+# Common Go / dev ignores
+/tmp
+/bin
+vendor/
