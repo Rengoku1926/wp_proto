@@ -7,6 +7,7 @@ import (
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/config"
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/database"
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/logger"
+	"github.com/Rengoku1926/wp_proto/apps/backend/internal/server"
 )
 
 func main() {
@@ -41,6 +42,11 @@ func main() {
 	defer redisClient.Close()
 	log.Info().Msg("successfully connected to redis")
 
-	_ = pool
-	_ = redisClient
+	srv := server.NewServer(pool, redisClient, log, cfg)
+	srv.RegisterRoutes()
+
+	if err := srv.Start(); err != nil {
+        log.Fatal().Err(err).Msg("server failed")
+        os.Exit(1)
+    }
 }

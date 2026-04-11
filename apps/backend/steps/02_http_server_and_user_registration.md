@@ -61,11 +61,11 @@ var (
 
 Three errors cover the vast majority of cases in a CRUD API:
 
-| Error | HTTP Status | When |
-|-------|-------------|------|
-| `ErrNotFound` | 404 | `SELECT` returns no rows |
-| `ErrDuplicate` | 409 | `INSERT` violates a `UNIQUE` constraint |
-| `ErrValidation` | 400 | Empty username, too long, etc. |
+| Error           | HTTP Status | When                                    |
+| --------------- | ----------- | --------------------------------------- |
+| `ErrNotFound`   | 404         | `SELECT` returns no rows                |
+| `ErrDuplicate`  | 409         | `INSERT` violates a `UNIQUE` constraint |
+| `ErrValidation` | 400         | Empty username, too long, etc.          |
 
 ---
 
