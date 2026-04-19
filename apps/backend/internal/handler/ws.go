@@ -19,12 +19,13 @@ var upgrader = websocket.Upgrader{
 
 type WSHandler struct {
 	hub          *ConnRegistry
+	pubsubRepo   *repository.PubSubRepo
 	msgRepo      *repository.MessageRepo
 	stateService *service.StateService
 }
 
-func NewWSHandler(registry *ConnRegistry, msgRepo *repository.MessageRepo, stateService *service.StateService) *WSHandler {
-	return &WSHandler{hub: registry, msgRepo: msgRepo, stateService: stateService}
+func NewWSHandler(registry *ConnRegistry, pubsubRepo *repository.PubSubRepo, msgRepo *repository.MessageRepo, stateService *service.StateService) *WSHandler {
+	return &WSHandler{hub: registry, pubsubRepo: pubsubRepo, msgRepo: msgRepo, stateService: stateService}
 }
 
 func (h *WSHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -40,7 +41,7 @@ func (h *WSHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := NewClient(h.hub, conn, userID, h.msgRepo, h.stateService)
+	client := NewClient(h.hub, conn, userID, h.pubsubRepo, h.msgRepo, h.stateService)
 	client.hub.register <- client
 
 	go client.writePump()

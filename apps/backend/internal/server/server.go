@@ -58,7 +58,8 @@ func (s *Server) RegisterRoutes() {
     registry := handler.NewConnRegistry()
     go registry.Run()
     stateService := service.NewStateService(s.pool)
-	wsHandler := handler.NewWSHandler(registry, msgRepo, stateService)
+	pubsubRepo := repository.NewPubSubRepo(s.redis)
+	wsHandler := handler.NewWSHandler(registry, pubsubRepo, msgRepo, stateService)
     s.mux.HandleFunc("GET /ws", wsHandler.HandleWebSocket)
 }
 

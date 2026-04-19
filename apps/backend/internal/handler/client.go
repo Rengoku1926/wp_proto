@@ -12,6 +12,7 @@ import (
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/service"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -57,25 +58,40 @@ type Client struct {
 	conn         *websocket.Conn
 	userID       string
 	send         chan []byte
+	sub 		 *redis.PubSub	
+	pubsubRepo *repository.PubSubRepo
 	msgRepo      *repository.MessageRepo
 	stateService *service.StateService
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, userID string, msgRepo *repository.MessageRepo, stateService *service.StateService) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, userID string, pubsubRepo *repository.PubSubRepo, msgRepo *repository.MessageRepo, stateService *service.StateService) *Client {
 	return &Client{
 		hub:          hub,
 		conn:         conn,
 		userID:       userID,
 		send:         make(chan []byte, sendChannelSize),
+		sub:          pubsubRepo.Subscribe(context.Background(), userID),
+		pubsubRepo:   pubsubRepo,
 		msgRepo:      msgRepo,
 		stateService: stateService,
 	}
+}
+
+func (c *Client) subscribeLoop() {
+	ch := c.sub.Channel()
+	for msg := range ch {
+		c.send <- []byte(msg.Payload)
+	}
+	logger.Log.Debug().Str("user", c.userID).Msg("subscribeLoop exited")
 }
 
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()
+		if c.sub != nil{
+			c.sub.Close()
+		}
 		logger.Log.Debug().Str("userID", c.userID).Msg("readPump exited")
 	}()
 
@@ -156,11 +172,22 @@ func (c *Client) handleMessage(ctx context.Context, raw json.RawMessage) {
 
 	_, _ = c.stateService.Transition(ctx, msg.ID.String(), service.StateSent)
 
+	sentAck, _ := json.Marshal(Envelope{
+		Type: "state_update",
+		Payload: mustMarshal(StateUpdatePayload{
+			MessageID: msg.ID.String(),
+			ClientID:  clientUUID.String(),
+			State:     service.StateSent,
+		}),
+	})
 	c.sendJSON("state_update", StateUpdatePayload{
 		MessageID: msg.ID.String(),
 		ClientID:  clientUUID.String(),
 		State:     service.StateSent,
 	})
+	if err := c.pubsubRepo.Publish(ctx, c.userID, sentAck); err != nil {
+		logger.Log.Error().Err(err).Msg("failed to publish SENT ack")
+	}
 
 	outbound, _ := json.Marshal(Envelope{
 		Type: "message",
@@ -170,6 +197,9 @@ func (c *Client) handleMessage(ctx context.Context, raw json.RawMessage) {
 			"content":    p.Content,
 		}),
 	})
+	if err := c.pubsubRepo.Publish(ctx, msg.RecipientID.String(), outbound); err != nil {
+		logger.Log.Error().Err(err).Msg("failed to publish message to recipient")
+	}
 	c.hub.SendToUser(p.RecipientID, outbound)
 }
 
@@ -206,6 +236,9 @@ func (c *Client) handleAck(ctx context.Context, raw json.RawMessage) {
 			State:     newState,
 		}),
 	})
+	if err := c.pubsubRepo.Publish(ctx, msg.SenderID.String(), outbound); err != nil {
+		logger.Log.Error().Err(err).Msg("failed to publish state update")
+	}
 	c.hub.SendToUser(msg.SenderID.String(), outbound)
 }
 

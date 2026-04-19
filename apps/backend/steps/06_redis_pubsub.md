@@ -420,11 +420,11 @@ Same pattern: update Postgres, then PUBLISH via Redis. The sender's `subscribeLo
 
 Each client now has **3 goroutines**:
 
-| Goroutine       | Started by         | Reads from            | Writes to        | Exit trigger                          |
-|-----------------|--------------------|-----------------------|-------------------|---------------------------------------|
-| `readPump`      | HandleWebSocket    | WebSocket conn        | Redis (PUBLISH)   | WS read error or close                |
-| `writePump`     | HandleWebSocket    | `client.send` chan    | WebSocket conn    | `send` chan closed by Hub             |
-| `subscribeLoop` | HandleWebSocket    | Redis subscription    | `client.send` chan | `sub.Close()` called by readPump      |
+| Goroutine       | Started by      | Reads from         | Writes to          | Exit trigger                     |
+| --------------- | --------------- | ------------------ | ------------------ | -------------------------------- |
+| `readPump`      | HandleWebSocket | WebSocket conn     | Redis (PUBLISH)    | WS read error or close           |
+| `writePump`     | HandleWebSocket | `client.send` chan | WebSocket conn     | `send` chan closed by Hub        |
+| `subscribeLoop` | HandleWebSocket | Redis subscription | `client.send` chan | `sub.Close()` called by readPump |
 
 ### Shutdown sequence
 
@@ -769,14 +769,14 @@ This confirms `sub.Close()` was called in readPump's defer, and the subscribeLoo
 
 ## What Changed From Step 5
 
-| Component        | Before (Step 5)                        | After (Step 6)                           |
-|------------------|----------------------------------------|------------------------------------------|
-| Message routing  | `hub.clients[id].send <- payload`      | `pubsubRepo.Publish(ctx, id, payload)`   |
-| State routing    | `hub.clients[senderID].send <- ack`    | `pubsubRepo.Publish(ctx, senderID, ack)` |
-| Client goroutines| readPump, writePump (2)                | readPump, writePump, subscribeLoop (3)   |
-| Hub responsibility| Route messages + manage connections    | Manage connections only                  |
-| New files        | --                                     | `internal/repository/pubsub.go`          |
-| Modified files   | --                                     | `client.go`, `hub.go`, `websocket.go`    |
+| Component          | Before (Step 5)                     | After (Step 6)                           |
+| ------------------ | ----------------------------------- | ---------------------------------------- |
+| Message routing    | `hub.clients[id].send <- payload`   | `pubsubRepo.Publish(ctx, id, payload)`   |
+| State routing      | `hub.clients[senderID].send <- ack` | `pubsubRepo.Publish(ctx, senderID, ack)` |
+| Client goroutines  | readPump, writePump (2)             | readPump, writePump, subscribeLoop (3)   |
+| Hub responsibility | Route messages + manage connections | Manage connections only                  |
+| New files          | --                                  | `internal/repository/pubsub.go`          |
+| Modified files     | --                                  | `client.go`, `hub.go`, `websocket.go`    |
 
 ---
 
