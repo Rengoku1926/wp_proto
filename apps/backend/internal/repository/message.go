@@ -54,7 +54,10 @@ func (r *MessageRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Message
 }
 
 func (r *MessageRepo) GetByClientID(ctx context.Context, clientID uuid.UUID) (*model.Message, error){
-	query := `SELECT id, client_id, sender_id, recipient_id, group_id, body, state, created_at, updated_at, updated_at FROM messages WHERE client_id = $1`
+	query := `
+		SELECT id, client_id, sender_id, recipient_id, group_id,
+		       body, state, created_at, updated_at
+		FROM messages WHERE client_id = $1`
 
 	var m  model.Message
 	err := r.pool.QueryRow(ctx, query, clientID).Scan(&m.ID, &m.ClientID, &m.SenderID, &m.RecipientID, &m.GroupID, &m.Body, &m.State, &m.CreatedAt, &m.UpdatedAt)

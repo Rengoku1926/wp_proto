@@ -171,6 +171,7 @@ func (h *Hub) IsOnline(userID string) bool {
 **Why `sync.RWMutex` if the Hub owns all writes?** The `Run()` goroutine is the sole writer, but it still needs to coordinate with readers. When `GetClient` is called from a message-routing goroutine (which is `readPump` of a different client), it needs to see a consistent map. So `Run()` acquires a write lock (`mu.Lock()`) before mutating, and `GetClient`/`IsOnline` acquire a read lock (`mu.RLock()`). Multiple readers can proceed concurrently; only writes block.
 
 **Why check `existing == client` in unregister?** Consider this sequence:
+
 1. User A connects (Client pointer `0x1`), registered.
 2. User A's network drops. Server has not detected it yet.
 3. User A reconnects (Client pointer `0x2`). The register case closes `0x1`'s send channel and replaces the map entry with `0x2`.
@@ -615,29 +616,29 @@ Let's audit every shared resource:
 
 ### The `clients` map
 
-| Operation | Who does it | Protection |
-|-----------|-------------|------------|
-| Write (add/delete) | Hub.Run() only | `mu.Lock()` (write lock) |
+| Operation                  | Who does it                                              | Protection               |
+| -------------------------- | -------------------------------------------------------- | ------------------------ |
+| Write (add/delete)         | Hub.Run() only                                           | `mu.Lock()` (write lock) |
 | Read (GetClient, IsOnline) | Any goroutine (readPump of other clients, HTTP handlers) | `mu.RLock()` (read lock) |
 
 Since Hub.Run() is the sole writer and it always acquires `mu.Lock()` before writing, and all readers acquire `mu.RLock()`, there are no data races. Multiple readers can proceed concurrently (RLock does not block other RLocks).
 
 ### The `websocket.Conn`
 
-| Operation | Who does it | Protection |
-|-----------|-------------|------------|
-| Read (ReadMessage) | readPump only | Single reader -- no lock needed |
+| Operation                        | Who does it    | Protection                      |
+| -------------------------------- | -------------- | ------------------------------- |
+| Read (ReadMessage)               | readPump only  | Single reader -- no lock needed |
 | Write (WriteMessage, NextWriter) | writePump only | Single writer -- no lock needed |
 
 The gorilla/websocket library documents that a Conn supports one concurrent reader and one concurrent writer. Our design matches this exactly.
 
 ### The `send` channel
 
-| Operation | Who does it | Protection |
-|-----------|-------------|------------|
-| Send to channel | Any goroutine (readPump of sender, Hub during duplicate-close) | Channel is inherently thread-safe |
-| Receive from channel | writePump only | Single receiver -- no contention |
-| Close channel | Hub.Run() only | Only closed once, from one place |
+| Operation            | Who does it                                                    | Protection                        |
+| -------------------- | -------------------------------------------------------------- | --------------------------------- |
+| Send to channel      | Any goroutine (readPump of sender, Hub during duplicate-close) | Channel is inherently thread-safe |
+| Receive from channel | writePump only                                                 | Single receiver -- no contention  |
+| Close channel        | Hub.Run() only                                                 | Only closed once, from one place  |
 
 Channels in Go are safe for concurrent sends. The only danger is closing a channel that has active senders, but our design ensures that once a client is unregistered (and its send channel closed), no new messages will be routed to it because `GetClient` will return `nil`.
 
@@ -653,6 +654,7 @@ default:
 ```
 
 This is safe because:
+
 - If the channel is already closed (recipient was unregistered between our `GetClient` call and this send), we would get a panic... **except** we do the `GetClient` + send in the same goroutine (readPump of sender), and the Hub only closes the channel when it processes the unregister. Since the Hub's Run loop is sequential, there is a tiny window where this could race. To be fully safe, we could wrap this in a recover, but in practice the window is negligible and the worst case is a panic that crashes one goroutine, not the server. For a production system, you would add a recover or use a mutex-guarded send helper. For this tutorial, we accept the tradeoff.
 
 ---
@@ -840,6 +842,7 @@ go run ./cmd/main.go
 ```
 
 You should see:
+
 ```
 {"level":"info","addr":":8080","message":"server starting"}
 ```
@@ -849,21 +852,25 @@ You should see:
 If you have `websocat` installed (`brew install websocat`):
 
 **Connect User A:**
+
 ```bash
 websocat ws://localhost:8080/ws?userId=alice
 ```
 
 Server log:
+
 ```
 {"level":"info","userID":"alice","total_clients":1,"message":"client registered"}
 ```
 
 **Connect User B (new terminal):**
+
 ```bash
 websocat ws://localhost:8080/ws?userId=bob
 ```
 
 Server log:
+
 ```
 {"level":"info","userID":"bob","total_clients":2,"message":"client registered"}
 ```
@@ -871,26 +878,30 @@ Server log:
 **Send a message from Alice to Bob:**
 
 In Alice's websocat terminal, type:
+
 ```json
-{"type":"dm","payload":{"to":"bob","content":"hello bob!"}}
+{ "type": "dm", "payload": { "to": "bob", "content": "hello bob!" } }
 ```
 
 Server log:
+
 ```
 {"level":"info","from":"alice","to":"bob","content":"hello bob!","message":"direct message received"}
 {"level":"debug","to":"bob","message":"message pushed to recipient send channel"}
 ```
 
 Bob's websocat terminal should print:
+
 ```json
-{"type":"dm","payload":{"to":"bob","content":"hello bob!"}}
+{ "type": "dm", "payload": { "to": "bob", "content": "hello bob!" } }
 ```
 
 **Send a message from Bob to Alice:**
 
 In Bob's terminal:
+
 ```json
-{"type":"dm","payload":{"to":"alice","content":"hey alice!"}}
+{ "type": "dm", "payload": { "to": "alice", "content": "hey alice!" } }
 ```
 
 Alice should see it. Bidirectional messaging works.
@@ -900,6 +911,7 @@ Alice should see it. Bidirectional messaging works.
 **Kill Alice's connection** by pressing Ctrl+C in her websocat terminal.
 
 Server log (immediately):
+
 ```
 {"level":"info","userID":"alice","total_clients":1,"message":"client unregistered"}
 {"level":"debug","userID":"alice","message":"readPump exited"}
@@ -911,11 +923,13 @@ Both `readPump exited` and `writePump exited` should appear. This confirms zero 
 **Send a message from Bob to offline Alice:**
 
 In Bob's terminal:
+
 ```json
-{"type":"dm","payload":{"to":"alice","content":"are you there?"}}
+{ "type": "dm", "payload": { "to": "alice", "content": "are you there?" } }
 ```
 
 Server log:
+
 ```
 {"level":"debug","to":"alice","message":"recipient offline, message saved for later delivery"}
 ```
@@ -925,16 +939,19 @@ No crash, no panic. The message is (will be) saved in the DB for later.
 ### Test duplicate connection handling
 
 **Reconnect Alice:**
+
 ```bash
 websocat ws://localhost:8080/ws?userId=alice
 ```
 
 **While still connected, open another Alice connection in a new terminal:**
+
 ```bash
 websocat ws://localhost:8080/ws?userId=alice
 ```
 
 Server log:
+
 ```
 {"level":"warn","userID":"alice","message":"duplicate connection, closing old one"}
 {"level":"info","userID":"alice","total_clients":2,"message":"client registered"}
@@ -948,14 +965,15 @@ The old Alice connection should close (websocat exits). The new one stays alive.
 
 What we built in this step:
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| Hub | `internal/handler/hub.go` | Central coordinator. Owns the client map. Single event loop via channels. |
-| Client | `internal/handler/client.go` | Per-connection struct. readPump (reads from WS) + writePump (writes to WS). |
-| WS Handler | `internal/handler/ws_handler.go` | Upgrades HTTP to WS, creates Client, registers with Hub, starts pumps. |
-| main.go | `cmd/main.go` | Creates Hub, starts `hub.Run()`, wires up routes. |
+| Component  | File                             | Purpose                                                                     |
+| ---------- | -------------------------------- | --------------------------------------------------------------------------- |
+| Hub        | `internal/handler/hub.go`        | Central coordinator. Owns the client map. Single event loop via channels.   |
+| Client     | `internal/handler/client.go`     | Per-connection struct. readPump (reads from WS) + writePump (writes to WS). |
+| WS Handler | `internal/handler/ws_handler.go` | Upgrades HTTP to WS, creates Client, registers with Hub, starts pumps.      |
+| main.go    | `cmd/main.go`                    | Creates Hub, starts `hub.Run()`, wires up routes.                           |
 
 The Hub pattern gives us:
+
 - **No deadlocks:** No goroutine holds a lock while doing I/O.
 - **No goroutine leaks:** Every goroutine has a clear exit path.
 - **No data races:** One writer (Hub.Run), concurrent readers (RLock).
