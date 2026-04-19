@@ -56,6 +56,7 @@ func (s *Server) RegisterRoutes() {
     // WebSocket
     msgRepo := repository.NewMessageRepo(s.pool)
     registry := handler.NewConnRegistry()
+    go registry.Run()
     wsHandler := handler.NewWSHandler(registry, msgRepo)
     s.mux.HandleFunc("GET /ws", wsHandler.HandleWebSocket)
 }
