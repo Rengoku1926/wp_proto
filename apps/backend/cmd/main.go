@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/config"
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/database"
+	"github.com/Rengoku1926/wp_proto/apps/backend/internal/handler"
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/logger"
+	"github.com/Rengoku1926/wp_proto/apps/backend/internal/repository"
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/server"
 )
 
@@ -41,6 +44,13 @@ func main() {
 	}
 	defer redisClient.Close()
 	log.Info().Msg("successfully connected to redis")
+
+	msgRepo := repository.NewMessageRepo(pool)
+	registry := handler.NewConnRegistry()
+	wsHandler := handler.NewWSHandler(registry, msgRepo)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /ws", wsHandler.HandleWebSocket)
 
 	srv := server.NewServer(pool, redisClient, log, cfg)
 	srv.RegisterRoutes()

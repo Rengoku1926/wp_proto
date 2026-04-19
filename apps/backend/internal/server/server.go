@@ -52,6 +52,12 @@ func (s *Server) RegisterRoutes() {
     // User routes (Go 1.22+ enhanced mux patterns)
     s.mux.HandleFunc("POST /api/users", userHandler.HandleRegister)
     s.mux.HandleFunc("GET /api/users/{id}", userHandler.HandleGetUserById)
+
+    // WebSocket
+    msgRepo := repository.NewMessageRepo(s.pool)
+    registry := handler.NewConnRegistry()
+    wsHandler := handler.NewWSHandler(registry, msgRepo)
+    s.mux.HandleFunc("GET /ws", wsHandler.HandleWebSocket)
 }
 
 func (s *Server) Start() error {
@@ -63,38 +69,33 @@ func (s *Server) Start() error {
         IdleTimeout:  time.Duration(s.cfg.Server.IdleTimeout) * time.Second,
 	}
 
+    //channel that listens for os signals
 	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+    signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 
-	serveErr := make(chan error, 1)
+    //channel to chats server startup errors 
+    serverErr := make(chan error, 1)
 
-	go func(){
-		s.logger.Info().Str("port", s.cfg.Server.Port).Msg("server starting")
-		serveErr <- httpServer.ListenAndServe()
-	}()
+    go func(){
+        s.logger.Info().Str("port", s.cfg.Server.Port).Msg("server starting")
+        serverErr <- httpServer.ListenAndServe()
+    }()
 
-	//block until we receive a shutdown signal or a startup error 
-	select {
-    case err := <-serveErr:
-        // ListenAndServe returned immediately -- likely a port conflict
-        return fmt.Errorf("server error: %w", err)
-
+    select {
+    case err := <-serverErr:
+        return fmt.Errorf("server error : %w", err)
     case sig := <-shutdown:
         s.logger.Info().Str("signal", sig.String()).Msg("shutdown signal received")
-
-        // Give active requests 15 seconds to complete
+        //give active requests 15 sec to complete
         ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
         defer cancel()
 
-        if err := httpServer.Shutdown(ctx); err != nil {
-            // Force close if graceful shutdown times out
+        if err := httpServer.Shutdown(ctx); err != nil{
             s.logger.Error().Err(err).Msg("graceful shutdown failed, forcing close")
             httpServer.Close()
             return fmt.Errorf("graceful shutdown failed: %w", err)
         }
-
-        s.logger.Info().Msg("server stopped gracefully")
+        s.logger.Info().Msg("server shutdown gracefully")
     }
-
     return nil
 }
