@@ -112,3 +112,20 @@ func (h *Hub) IsOnline(userID string) bool {
 	_, ok := h.clients[userID]
 	return ok
 }
+// SendToUser delivers data to the user's send channel if they are connected.
+// Returns true if the message was queued, false if the user is offline or the channel is full.
+func (h *Hub) SendToUser(userID string, data []byte) bool {
+	h.mu.RLock()
+	client, ok := h.clients[userID]
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	select {
+	case client.send <- data:
+		return true
+	default:
+		logger.Log.Warn().Str("userID", userID).Msg("slow client: send channel full, dropping real-time delivery")
+		return false
+	}
+}

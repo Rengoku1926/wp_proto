@@ -14,12 +14,12 @@ Every message moves through exactly four states, **always forward, never backwar
 PENDING (0)  -->  SENT (1)  -->  DELIVERED (2)  -->  READ (3)
 ```
 
-| State | Value | Meaning | WhatsApp UI |
-|-------|-------|---------|-------------|
-| PENDING | 0 | Client generated the message, not yet received by server | Clock icon |
-| SENT | 1 | Server accepted and stored the message | Single grey tick |
-| DELIVERED | 2 | Recipient's device acknowledged receipt | Double grey ticks |
-| READ | 3 | Recipient opened the conversation | Double blue ticks |
+| State     | Value | Meaning                                                  | WhatsApp UI       |
+| --------- | ----- | -------------------------------------------------------- | ----------------- |
+| PENDING   | 0     | Client generated the message, not yet received by server | Clock icon        |
+| SENT      | 1     | Server accepted and stored the message                   | Single grey tick  |
+| DELIVERED | 2     | Recipient's device acknowledged receipt                  | Double grey ticks |
+| READ      | 3     | Recipient opened the conversation                        | Double blue ticks |
 
 Key rule: **states only move forward.** A message that is DELIVERED can never go back to SENT. A message that is READ can never go back to DELIVERED. This makes the system idempotent and safe under retries.
 
@@ -142,10 +142,7 @@ Recipient (Bob) -> Server:
 {
   "type": "read",
   "payload": {
-    "message_ids": [
-      "server-generated-uuid-1",
-      "server-generated-uuid-2"
-    ]
+    "message_ids": ["server-generated-uuid-1", "server-generated-uuid-2"]
   }
 }
 ```
@@ -360,7 +357,7 @@ func (c *Client) handleMessage(ctx context.Context, raw json.RawMessage) {
 	update := StateUpdatePayload{
 		MessageID: msg.ID,
 		ClientID:  p.ClientID,
-		State:     service.StateSent,
+		State:     service.StateSent,	
 	}
 	c.sendJSON("state_update", update)
 
@@ -498,7 +495,7 @@ type Message struct {
 	RecipientID string
 	ClientID    string
 	Content     string
-	State       int
+	State       int+
 }
 
 type MessageRepo struct {
@@ -619,13 +616,27 @@ wscat -c "ws://localhost:8080/ws?user_id=bob-uuid"
 In Alice's terminal, type:
 
 ```json
-{"type":"message","payload":{"client_id":"local-1","recipient_id":"bob-uuid","content":"Hey Bob!"}}
+{
+  "type": "message",
+  "payload": {
+    "client_id": "local-1",
+    "recipient_id": "bob-uuid",
+    "content": "Hey Bob!"
+  }
+}
 ```
 
 Alice should immediately receive a state_update confirming SENT:
 
 ```json
-{"type":"state_update","payload":{"message_id":"<server-uuid>","client_id":"local-1","state":1}}
+{
+  "type": "state_update",
+  "payload": {
+    "message_id": "<server-uuid>",
+    "client_id": "local-1",
+    "state": 1
+  }
+}
 ```
 
 Single grey tick.
@@ -635,19 +646,29 @@ Single grey tick.
 Bob's terminal shows the incoming message:
 
 ```json
-{"type":"message","payload":{"message_id":"<server-uuid>","sender_id":"alice-uuid","content":"Hey Bob!"}}
+{
+  "type": "message",
+  "payload": {
+    "message_id": "<server-uuid>",
+    "sender_id": "alice-uuid",
+    "content": "Hey Bob!"
+  }
+}
 ```
 
 Bob's client (or you manually) sends an ack:
 
 ```json
-{"type":"ack","payload":{"message_id":"<server-uuid>"}}
+{ "type": "ack", "payload": { "message_id": "<server-uuid>" } }
 ```
 
 Alice's terminal receives:
 
 ```json
-{"type":"state_update","payload":{"message_id":"<server-uuid>","state":2}}
+{
+  "type": "state_update",
+  "payload": { "message_id": "<server-uuid>", "state": 2 }
+}
 ```
 
 Double grey ticks.
@@ -657,13 +678,16 @@ Double grey ticks.
 Bob opens the conversation (or you send manually):
 
 ```json
-{"type":"read","payload":{"message_ids":["<server-uuid>"]}}
+{ "type": "read", "payload": { "message_ids": ["<server-uuid>"] } }
 ```
 
 Alice's terminal receives:
 
 ```json
-{"type":"state_update","payload":{"message_id":"<server-uuid>","state":3}}
+{
+  "type": "state_update",
+  "payload": { "message_id": "<server-uuid>", "state": 3 }
+}
 ```
 
 Double blue ticks.

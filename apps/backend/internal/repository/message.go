@@ -80,3 +80,4 @@ func (r *MessageRepo) UpdateState(ctx context.Context, id uuid.UUID, state model
 	}
 	return nil
 }
+

@@ -26,6 +26,11 @@ func main() {
 	}
 	defer pool.Close()
 
+	if err := database.Migrate(ctx, pool); err != nil {
+		log.Fatal().Err(err).Msg("failed to run migrations")
+	}
+	log.Info().Msg("migrations applied")
+
 	redisClient, err := database.ConnectRedis(ctx, cfg.Redis)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to connect to redis")
