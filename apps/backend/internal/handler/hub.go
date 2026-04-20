@@ -15,7 +15,7 @@ type Hub struct {
 	// READ access: through RLock-protected methods like GetClient, IsOnline.
 	clients map[string]*Client
 
-	// register is a channel for	 clients requesting to join the hub.
+	// register is a channel for clients requesting to join the hub.
 	// The readPump or WebSocket handler sends the client here after upgrade.
 	register chan *Client
 

@@ -38,12 +38,12 @@ offline:{userID}
 
 A Redis List is a doubly-linked list of strings. It supports:
 
-| Command | What it does | Time complexity |
-|---------|-------------|-----------------|
-| `LPUSH key value` | Insert at the head (left) of the list | O(1) |
-| `RPOP key` | Remove and return from the tail (right) | O(1) |
-| `LLEN key` | Return the length of the list | O(1) |
-| `EXPIRE key seconds` | Set a TTL on the key | O(1) |
+| Command              | What it does                            | Time complexity |
+| -------------------- | --------------------------------------- | --------------- |
+| `LPUSH key value`    | Insert at the head (left) of the list   | O(1)            |
+| `RPOP key`           | Remove and return from the tail (right) | O(1)            |
+| `LLEN key`           | Return the length of the list           | O(1)            |
+| `EXPIRE key seconds` | Set a TTL on the key                    | O(1)            |
 
 By pushing at the head (LPUSH) and popping from the tail (RPOP), we get **FIFO order** -- messages come out in the same order they went in.
 
@@ -56,12 +56,12 @@ RPOP:  [msg3] -> [msg2] -> [msg1]    (oldest popped first)
 
 ### Why Redis Lists over Postgres?
 
-| Concern | Redis List | Postgres table |
-|---------|-----------|----------------|
-| Push latency | ~0.1ms (in-memory) | ~1-5ms (disk + WAL) |
-| Pop (drain) | O(1) per message, atomic | DELETE with ORDER BY, row locks |
-| TTL | Built-in EXPIRE, automatic cleanup | Requires a cron job or pg_cron |
-| Bounded retention | EXPIRE handles it | Manual cleanup |
+| Concern           | Redis List                          | Postgres table                      |
+| ----------------- | ----------------------------------- | ----------------------------------- |
+| Push latency      | ~0.1ms (in-memory)                  | ~1-5ms (disk + WAL)                 |
+| Pop (drain)       | O(1) per message, atomic            | DELETE with ORDER BY, row locks     |
+| TTL               | Built-in EXPIRE, automatic cleanup  | Requires a cron job or pg_cron      |
+| Bounded retention | EXPIRE handles it                   | Manual cleanup                      |
 | Atomic push + TTL | Pipeline (2 commands, 1 round-trip) | Transaction (BEGIN/COMMIT overhead) |
 
 The offline buffer is ephemeral by design. Messages live here for at most 30 days. Postgres already has the permanent copy. Redis gives us speed and automatic expiry.
@@ -1033,14 +1033,14 @@ The buffer has been fully drained. The key may still exist briefly (with an empt
 
 ## What Changed From Step 6
 
-| Component | Before (Step 6) | After (Step 7) |
-|-----------|-----------------|-----------------|
-| Message routing | `pubsubRepo.Publish()` directly | `Router.Route()` (online/offline decision) |
-| Offline handling | Messages silently dropped | Buffered in `offline:{userID}` Redis list |
-| On reconnect | Nothing | `drainOfflineBuffer()` replays missed messages |
-| Hub | No mutex, no IsOnline() | `sync.RWMutex`, `IsOnline()` method |
-| New files | -- | `internal/repository/offline.go`, `internal/router/router.go` |
-| Modified files | -- | `hub.go`, `client.go`, `websocket.go`, `main.go` |
+| Component        | Before (Step 6)                 | After (Step 7)                                                |
+| ---------------- | ------------------------------- | ------------------------------------------------------------- |
+| Message routing  | `pubsubRepo.Publish()` directly | `Router.Route()` (online/offline decision)                    |
+| Offline handling | Messages silently dropped       | Buffered in `offline:{userID}` Redis list                     |
+| On reconnect     | Nothing                         | `drainOfflineBuffer()` replays missed messages                |
+| Hub              | No mutex, no IsOnline()         | `sync.RWMutex`, `IsOnline()` method                           |
+| New files        | --                              | `internal/repository/offline.go`, `internal/router/router.go` |
+| Modified files   | --                              | `hub.go`, `client.go`, `websocket.go`, `main.go`              |
 
 ---
 

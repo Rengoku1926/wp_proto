@@ -172,22 +172,22 @@ func (c *Client) handleMessage(ctx context.Context, raw json.RawMessage) {
 
 	_, _ = c.stateService.Transition(ctx, msg.ID.String(), service.StateSent)
 
-	sentAck, _ := json.Marshal(Envelope{
-		Type: "state_update",
-		Payload: mustMarshal(StateUpdatePayload{
-			MessageID: msg.ID.String(),
-			ClientID:  clientUUID.String(),
-			State:     service.StateSent,
-		}),
-	})
+	// sentAck, _ := json.Marshal(Envelope{
+	// 	Type: "state_update",
+	// 	Payload: mustMarshal(StateUpdatePayload{
+	// 		MessageID: msg.ID.String(),
+	// 		ClientID:  clientUUID.String(),
+	// 		State:     service.StateSent,
+	// 	}),
+	// })
 	c.sendJSON("state_update", StateUpdatePayload{
 		MessageID: msg.ID.String(),
 		ClientID:  clientUUID.String(),
 		State:     service.StateSent,
 	})
-	if err := c.pubsubRepo.Publish(ctx, c.userID, sentAck); err != nil {
-		logger.Log.Error().Err(err).Msg("failed to publish SENT ack")
-	}
+	// if err := c.pubsubRepo.Publish(ctx, c.userID, sentAck); err != nil {
+	// 	logger.Log.Error().Err(err).Msg("failed to publish SENT ack")
+	// }
 
 	outbound, _ := json.Marshal(Envelope{
 		Type: "message",
