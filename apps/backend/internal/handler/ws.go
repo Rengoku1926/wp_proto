@@ -22,10 +22,11 @@ type WSHandler struct {
 	pubsubRepo   *repository.PubSubRepo
 	msgRepo      *repository.MessageRepo
 	stateService *service.StateService
+	offlineStore *repository.OfflineStore
 }
 
-func NewWSHandler(registry *ConnRegistry, pubsubRepo *repository.PubSubRepo, msgRepo *repository.MessageRepo, stateService *service.StateService) *WSHandler {
-	return &WSHandler{hub: registry, pubsubRepo: pubsubRepo, msgRepo: msgRepo, stateService: stateService}
+func NewWSHandler(registry *ConnRegistry, pubsubRepo *repository.PubSubRepo, msgRepo *repository.MessageRepo, stateService *service.StateService, offlineStore *repository.OfflineStore) *WSHandler {
+	return &WSHandler{hub: registry, pubsubRepo: pubsubRepo, msgRepo: msgRepo, stateService: stateService, offlineStore: offlineStore}
 }
 
 func (h *WSHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -41,9 +42,10 @@ func (h *WSHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := NewClient(h.hub, conn, userID, h.pubsubRepo, h.msgRepo, h.stateService)
+	client := NewClient(h.hub, conn, userID, h.pubsubRepo, h.msgRepo, h.stateService, h.offlineStore)
 	client.hub.register <- client
 
 	go client.writePump()
 	go client.readPump()
+	go client.subscribeLoop()
 }

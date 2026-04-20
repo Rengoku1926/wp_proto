@@ -446,7 +446,8 @@ func (c *Client) drainOfflineBuffer() {
 				Str("msg_id", msg.ID).
 				Msg("send channel full during offline drain, message dropped")
 		}
-	}
+	}+
+	
 
 	log.Info().
 		Str("user", c.userID).

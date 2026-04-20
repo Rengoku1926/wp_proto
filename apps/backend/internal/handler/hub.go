@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/logger"
+	"github.com/rs/zerolog/log"
 )
 
 // Hub maintains the set of active clients and routes messages between them.
@@ -58,38 +59,20 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.register:
 			h.mu.Lock()
-
-			// If this user already has an active connection, close the old one.
-			// This handles the case where a user opens a second tab or reconnects
-			// after a dirty disconnect before the server detects it.
-			if existing, ok := h.clients[client.userID]; ok {
-				logger.Log.Warn().
-					Str("userID", client.userID).
-					Msg("duplicate connection, closing old one")
-				close(existing.send)
-				delete(h.clients, client.userID)
-			}
-
 			h.clients[client.userID] = client
 			h.mu.Unlock()
+			log.Info().Str("user", client.userID).Int("total", len(h.clients)).Msg("client registered")
 
-			logger.Log.Info().
-				Str("userID", client.userID).
-				Int("total_clients", len(h.clients)).
-				Msg("client registered")
+			// Drain offline buffer AFTER registration.
+			// See Section 5 for why ordering matters.
+			go client.drainOfflineBuffer()
 
 		case client := <-h.unregister:
 			h.mu.Lock()
-			// Only delete if the client in the map is the SAME pointer.
-			// This prevents a race where a new connection for the same userID
-			// registered after this client was queued for unregister.
-			if existing, ok := h.clients[client.userID]; ok && existing == client {
-				close(client.send)
+			if _, ok := h.clients[client.userID]; ok {
 				delete(h.clients, client.userID)
-				logger.Log.Info().
-					Str("userID", client.userID).
-					Int("total_clients", len(h.clients)).
-					Msg("client unregistered")
+				close(client.send)
+				log.Info().Str("user", client.userID).Int("total", len(h.clients)).Msg("client unregistered")
 			}
 			h.mu.Unlock()
 		}
@@ -119,7 +102,7 @@ func (h *Hub) SendToUser(userID string, data []byte) bool {
 	client, ok := h.clients[userID]
 	h.mu.RUnlock()
 	if !ok {
-		return false
+			return false
 	}
 	select {
 	case client.send <- data:

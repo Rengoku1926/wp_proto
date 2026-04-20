@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -58,13 +59,61 @@ type Client struct {
 	conn         *websocket.Conn
 	userID       string
 	send         chan []byte
-	sub 		 *redis.PubSub	
-	pubsubRepo *repository.PubSubRepo
+	sub          *redis.PubSub
+	pubsubRepo   *repository.PubSubRepo
 	msgRepo      *repository.MessageRepo
 	stateService *service.StateService
+	offlineStore *repository.OfflineStore
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, userID string, pubsubRepo *repository.PubSubRepo, msgRepo *repository.MessageRepo, stateService *service.StateService) *Client {
+func (c *Client) drainOfflineBuffer() {
+	ctx := context.Background()
+
+	messages, err := c.offlineStore.Drain(ctx, c.userID)
+	if err != nil {
+		log.Error().Err(err).Str("user", c.userID).Msg("failed to drain offline buffer")
+		return
+	}
+
+	if len(messages) == 0 {
+		return
+	}
+
+	for _, msg := range messages {
+		payload, err := json.Marshal(Envelope{
+			Type: "message",
+			Payload: mustMarshal(map[string]string{
+				"message_id": msg.ID.String(),
+				"sender_id":  msg.SenderID.String(),
+				"content":    msg.Body,
+			}),
+		})
+		if err != nil {
+			log.Error().Err(err).Str("msg_id", msg.ID.String()).Msg("failed to marshal offline message")
+			continue
+		}
+
+		// Push to the client's send channel.
+		// Use select-with-default to avoid blocking if the channel is full
+		// (which would mean the client is slow or disconnected).
+		select {
+		case c.send <- payload:
+		default:
+			log.Warn().
+				Str("user", c.userID).
+				Str("msg_id", msg.ID.String()).
+				Msg("send channel full during offline drain, message dropped")
+		}
+	}
+	
+
+	log.Info().
+		Str("user", c.userID).
+		Int("count", len(messages)).
+		Msg("drained offline buffer")
+}
+
+func NewClient(hub *Hub, conn *websocket.Conn, userID string, pubsubRepo *repository.PubSubRepo, msgRepo *repository.MessageRepo, stateService *service.StateService, offlineStore *repository.OfflineStore) *Client {
 	return &Client{
 		hub:          hub,
 		conn:         conn,
@@ -74,6 +123,7 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID string, pubsubRepo *reposi
 		pubsubRepo:   pubsubRepo,
 		msgRepo:      msgRepo,
 		stateService: stateService,
+		offlineStore: offlineStore,
 	}
 }
 
@@ -89,7 +139,7 @@ func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()
-		if c.sub != nil{
+		if c.sub != nil {
 			c.sub.Close()
 		}
 		logger.Log.Debug().Str("userID", c.userID).Msg("readPump exited")
@@ -197,10 +247,20 @@ func (c *Client) handleMessage(ctx context.Context, raw json.RawMessage) {
 			"content":    p.Content,
 		}),
 	})
-	if err := c.pubsubRepo.Publish(ctx, msg.RecipientID.String(), outbound); err != nil {
-		logger.Log.Error().Err(err).Msg("failed to publish message to recipient")
+
+	recipientID := msg.RecipientID.String()
+	if c.hub.IsOnline(recipientID) {
+		if err := c.pubsubRepo.Publish(ctx, recipientID, outbound); err != nil {
+			logger.Log.Warn().Err(err).Str("recipient", recipientID).Msg("pub/sub failed, falling back to offline buffer")
+			if err := c.offlineStore.Push(ctx, recipientID, msg); err != nil {
+				logger.Log.Error().Err(err).Str("recipient", recipientID).Msg("failed to buffer offline message")
+			}
+		}
+	} else {
+		if err := c.offlineStore.Push(ctx, recipientID, msg); err != nil {
+			logger.Log.Error().Err(err).Str("recipient", recipientID).Msg("failed to buffer offline message")
+		}
 	}
-	c.hub.SendToUser(p.RecipientID, outbound)
 }
 
 // handleAck transitions the message to DELIVERED and notifies the original sender.
@@ -239,7 +299,6 @@ func (c *Client) handleAck(ctx context.Context, raw json.RawMessage) {
 	if err := c.pubsubRepo.Publish(ctx, msg.SenderID.String(), outbound); err != nil {
 		logger.Log.Error().Err(err).Msg("failed to publish state update")
 	}
-	c.hub.SendToUser(msg.SenderID.String(), outbound)
 }
 
 // handleRead transitions each message to READ and notifies the original sender.
@@ -276,11 +335,13 @@ func (c *Client) handleRead(ctx context.Context, raw json.RawMessage) {
 				State:     newState,
 			}),
 		})
-		c.hub.SendToUser(msg.SenderID.String(), outbound)
+		if err := c.pubsubRepo.Publish(ctx, msg.SenderID.String(), outbound); err != nil {
+			logger.Log.Error().Err(err).Str("message_id", msgIDStr).Msg("failed to publish read state update")
+		}
 	}
 }
 
-func (c *Client) sendJSON(msgType string, payload interface{}) {
+func (c *Client) sendJSON(msgType string, payload any) {
 	env := Envelope{
 		Type:    msgType,
 		Payload: mustMarshal(payload),
@@ -316,8 +377,7 @@ func (c *Client) writePump() {
 			}
 			w.Write(message)
 
-			n := len(c.send)
-			for i := 0; i < n; i++ {
+			for range len(c.send) {
 				w.Write([]byte("\n"))
 				w.Write(<-c.send)
 			}
@@ -334,10 +394,11 @@ func (c *Client) writePump() {
 	}
 }
 
-func mustMarshal(v interface{}) json.RawMessage {
+func mustMarshal(v any) json.RawMessage {
 	data, err := json.Marshal(v)
 	if err != nil {
 		panic("marshal failed: " + err.Error())
 	}
 	return data
 }
+
