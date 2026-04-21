@@ -28,11 +28,11 @@ The alternative is fanout on read (store once, each client fetches on demand), b
 
 In 1:1 messaging, state transitions are straightforward: one recipient ACKs and the sender sees the tick change immediately. Groups are different:
 
-| Tick State | 1:1 Rule | Group Rule |
-|------------|----------|------------|
-| Single grey tick (SENT) | Server accepted the message | Server accepted the message |
-| Double grey ticks (DELIVERED) | Recipient received it | **ALL** members received it |
-| Double blue ticks (READ) | Recipient read it | **ALL** members read it |
+| Tick State                    | 1:1 Rule                    | Group Rule                  |
+| ----------------------------- | --------------------------- | --------------------------- |
+| Single grey tick (SENT)       | Server accepted the message | Server accepted the message |
+| Double grey ticks (DELIVERED) | Recipient received it       | **ALL** members received it |
+| Double blue ticks (READ)      | Recipient read it           | **ALL** members read it     |
 
 This means if a group has 10 members and 9 have received the message but 1 is offline, the sender still sees a single tick. The aggregate state is the **minimum** across all members.
 
@@ -1213,25 +1213,51 @@ wscat -c "ws://localhost:8080/ws?user_id=${CHARLIE_ID}"
 In Alice's terminal:
 
 ```json
-{"type":"message","data":{"id":"msg-g-001","group_id":"<GROUP_ID>","content":"Hello group!"}}
+{
+  "type": "message",
+  "data": {
+    "id": "msg-g-001",
+    "group_id": "<GROUP_ID>",
+    "content": "Hello group!"
+  }
+}
 ```
 
 **Expected: Alice receives SENT ack:**
 
 ```json
-{"type":"state_update","data":{"message_id":"msg-g-001","state":"SENT"}}
+{
+  "type": "state_update",
+  "data": { "message_id": "msg-g-001", "state": "SENT" }
+}
 ```
 
 **Expected: Bob receives the message:**
 
 ```json
-{"type":"message","data":{"id":"msg-g-001","sender_id":"<ALICE_ID>","group_id":"<GROUP_ID>","content":"Hello group!"}}
+{
+  "type": "message",
+  "data": {
+    "id": "msg-g-001",
+    "sender_id": "<ALICE_ID>",
+    "group_id": "<GROUP_ID>",
+    "content": "Hello group!"
+  }
+}
 ```
 
 **Expected: Charlie receives the same message:**
 
 ```json
-{"type":"message","data":{"id":"msg-g-001","sender_id":"<ALICE_ID>","group_id":"<GROUP_ID>","content":"Hello group!"}}
+{
+  "type": "message",
+  "data": {
+    "id": "msg-g-001",
+    "sender_id": "<ALICE_ID>",
+    "group_id": "<GROUP_ID>",
+    "content": "Hello group!"
+  }
+}
 ```
 
 ### Step 5: Bob ACKs -- sender still sees single tick
@@ -1239,7 +1265,15 @@ In Alice's terminal:
 In Bob's terminal:
 
 ```json
-{"type":"state_update","data":{"message_id":"msg-g-001","state":"DELIVERED","sender_id":"<ALICE_ID>","group_id":"<GROUP_ID>"}}
+{
+  "type": "state_update",
+  "data": {
+    "message_id": "msg-g-001",
+    "state": "DELIVERED",
+    "sender_id": "<ALICE_ID>",
+    "group_id": "<GROUP_ID>"
+  }
+}
 ```
 
 **Expected: Alice receives NOTHING.** Charlie has not ACK'd yet, so the aggregate state is still SENT (MIN of DELIVERED, SENT) = SENT. No state_update is sent to Alice.
@@ -1256,13 +1290,24 @@ redis-cli GET fanout:pending:msg-g-001
 In Charlie's terminal:
 
 ```json
-{"type":"state_update","data":{"message_id":"msg-g-001","state":"DELIVERED","sender_id":"<ALICE_ID>","group_id":"<GROUP_ID>"}}
+{
+  "type": "state_update",
+  "data": {
+    "message_id": "msg-g-001",
+    "state": "DELIVERED",
+    "sender_id": "<ALICE_ID>",
+    "group_id": "<GROUP_ID>"
+  }
+}
 ```
 
 **Expected: Alice receives DELIVERED state update:**
 
 ```json
-{"type":"state_update","data":{"message_id":"msg-g-001","state":"DELIVERED"}}
+{
+  "type": "state_update",
+  "data": { "message_id": "msg-g-001", "state": "DELIVERED" }
+}
 ```
 
 Now all members have received the message. Alice sees double grey ticks.
@@ -1272,7 +1317,15 @@ Now all members have received the message. Alice sees double grey ticks.
 In Bob's terminal:
 
 ```json
-{"type":"state_update","data":{"message_id":"msg-g-001","state":"READ","sender_id":"<ALICE_ID>","group_id":"<GROUP_ID>"}}
+{
+  "type": "state_update",
+  "data": {
+    "message_id": "msg-g-001",
+    "state": "READ",
+    "sender_id": "<ALICE_ID>",
+    "group_id": "<GROUP_ID>"
+  }
+}
 ```
 
 **Expected: Alice receives NOTHING.** Charlie has not read yet.
@@ -1280,13 +1333,24 @@ In Bob's terminal:
 In Charlie's terminal:
 
 ```json
-{"type":"state_update","data":{"message_id":"msg-g-001","state":"READ","sender_id":"<ALICE_ID>","group_id":"<GROUP_ID>"}}
+{
+  "type": "state_update",
+  "data": {
+    "message_id": "msg-g-001",
+    "state": "READ",
+    "sender_id": "<ALICE_ID>",
+    "group_id": "<GROUP_ID>"
+  }
+}
 ```
 
 **Expected: Alice receives READ state update:**
 
 ```json
-{"type":"state_update","data":{"message_id":"msg-g-001","state":"READ"}}
+{
+  "type": "state_update",
+  "data": { "message_id": "msg-g-001", "state": "READ" }
+}
 ```
 
 Alice sees double blue ticks. All members have read the message.
@@ -1298,10 +1362,18 @@ Disconnect Charlie (close Terminal 3). Then have Alice send a new message:
 In Alice's terminal:
 
 ```json
-{"type":"message","data":{"id":"msg-g-002","group_id":"<GROUP_ID>","content":"Charlie is offline"}}
+{
+  "type": "message",
+  "data": {
+    "id": "msg-g-002",
+    "group_id": "<GROUP_ID>",
+    "content": "Charlie is offline"
+  }
+}
 ```
 
 **Expected:**
+
 - Alice receives SENT ack.
 - Bob receives the message (via Redis pub/sub).
 - Charlie does NOT receive the message (offline, Redis PUBLISH is fire-and-forget).
@@ -1309,7 +1381,15 @@ In Alice's terminal:
 Bob ACKs:
 
 ```json
-{"type":"state_update","data":{"message_id":"msg-g-002","state":"DELIVERED","sender_id":"<ALICE_ID>","group_id":"<GROUP_ID>"}}
+{
+  "type": "state_update",
+  "data": {
+    "message_id": "msg-g-002",
+    "state": "DELIVERED",
+    "sender_id": "<ALICE_ID>",
+    "group_id": "<GROUP_ID>"
+  }
+}
 ```
 
 **Expected: Alice receives NOTHING.** The pending counter decrements to 0, but when the engine computes the aggregate from Postgres, MIN(state) = 1 (Charlie's row is still SENT). So the aggregate is SENT and Alice does not see any tick change.
@@ -1335,14 +1415,14 @@ Bob is at DELIVERED (2), Charlie is still at SENT (1). Aggregate = MIN(2, 1) = 1
 
 ## What Changed From Step 7
 
-| Component | Before (Step 7) | After (Step 8) |
-|-----------|-----------------|-----------------|
-| Message routing | 1:1 only via `pubsubRepo.Publish` | 1:1 or group via Router.Route() |
-| State tracking | One state per message | Per-member state via `group_message_delivery` |
-| ACK handling | Forward to sender immediately | Group: aggregate via FanoutEngine |
-| New tables | -- | `groups`, `group_members`, `group_message_delivery` |
-| New files | -- | `model/group.go`, `repository/group.go`, `repository/group_delivery.go`, `handler/group.go`, `service/group.go`, `router/fanout.go` |
-| Modified files | -- | `router/router.go`, `handler/client.go` |
+| Component       | Before (Step 7)                   | After (Step 8)                                                                                                                      |
+| --------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Message routing | 1:1 only via `pubsubRepo.Publish` | 1:1 or group via Router.Route()                                                                                                     |
+| State tracking  | One state per message             | Per-member state via `group_message_delivery`                                                                                       |
+| ACK handling    | Forward to sender immediately     | Group: aggregate via FanoutEngine                                                                                                   |
+| New tables      | --                                | `groups`, `group_members`, `group_message_delivery`                                                                                 |
+| New files       | --                                | `model/group.go`, `repository/group.go`, `repository/group_delivery.go`, `handler/group.go`, `service/group.go`, `router/fanout.go` |
+| Modified files  | --                                | `router/router.go`, `handler/client.go`                                                                                             |
 
 ---
 

@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -33,7 +32,8 @@ type Envelope struct {
 // MessagePayload is the payload for frame type "message" (client -> server).
 type MessagePayload struct {
 	ClientID    string `json:"client_id"`
-	RecipientID string `json:"recipient_id"`
+	RecipientID string `json:"recipient_id,omitempty"`
+	GroupID     string `json:"group_id,omitempty"`
 	Content     string `json:"content"`
 }
 
@@ -54,6 +54,13 @@ type StateUpdatePayload struct {
 	State     int    `json:"state"`
 }
 
+// FanoutEngineIface is satisfied by router.FanoutEngine, defined here to avoid
+// a circular import (router imports handler for Hub).
+type FanoutEngineIface interface {
+	Fanout(ctx context.Context, senderID, messageID, groupID, content string) error
+	HandleMemberACK(ctx context.Context, messageID, memberID, senderID string, state int16) error
+}
+
 type Client struct {
 	hub          *Hub
 	conn         *websocket.Conn
@@ -64,6 +71,7 @@ type Client struct {
 	msgRepo      *repository.MessageRepo
 	stateService *service.StateService
 	offlineStore *repository.OfflineStore
+	fanout       FanoutEngineIface
 }
 
 func (c *Client) drainOfflineBuffer() {
@@ -71,7 +79,7 @@ func (c *Client) drainOfflineBuffer() {
 
 	messages, err := c.offlineStore.Drain(ctx, c.userID)
 	if err != nil {
-		log.Error().Err(err).Str("user", c.userID).Msg("failed to drain offline buffer")
+		logger.Log.Error().Err(err).Str("user", c.userID).Msg("failed to drain offline buffer")
 		return
 	}
 
@@ -80,40 +88,40 @@ func (c *Client) drainOfflineBuffer() {
 	}
 
 	for _, msg := range messages {
+		fields := map[string]string{
+			"message_id": msg.ID.String(),
+			"sender_id":  msg.SenderID.String(),
+			"content":    msg.Body,
+		}
+		if msg.GroupID != nil {
+			fields["group_id"] = msg.GroupID.String()
+		}
 		payload, err := json.Marshal(Envelope{
-			Type: "message",
-			Payload: mustMarshal(map[string]string{
-				"message_id": msg.ID.String(),
-				"sender_id":  msg.SenderID.String(),
-				"content":    msg.Body,
-			}),
+			Type:    "message",
+			Payload: mustMarshal(fields),
 		})
 		if err != nil {
-			log.Error().Err(err).Str("msg_id", msg.ID.String()).Msg("failed to marshal offline message")
+			logger.Log.Error().Err(err).Str("msg_id", msg.ID.String()).Msg("failed to marshal offline message")
 			continue
 		}
 
-		// Push to the client's send channel.
-		// Use select-with-default to avoid blocking if the channel is full
-		// (which would mean the client is slow or disconnected).
 		select {
 		case c.send <- payload:
 		default:
-			log.Warn().
+			logger.Log.Warn().
 				Str("user", c.userID).
 				Str("msg_id", msg.ID.String()).
 				Msg("send channel full during offline drain, message dropped")
 		}
 	}
-	
 
-	log.Info().
+	logger.Log.Info().
 		Str("user", c.userID).
 		Int("count", len(messages)).
 		Msg("drained offline buffer")
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, userID string, pubsubRepo *repository.PubSubRepo, msgRepo *repository.MessageRepo, stateService *service.StateService, offlineStore *repository.OfflineStore) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, userID string, pubsubRepo *repository.PubSubRepo, msgRepo *repository.MessageRepo, stateService *service.StateService, offlineStore *repository.OfflineStore, fanout FanoutEngineIface) *Client {
 	return &Client{
 		hub:          hub,
 		conn:         conn,
@@ -124,6 +132,7 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID string, pubsubRepo *reposi
 		msgRepo:      msgRepo,
 		stateService: stateService,
 		offlineStore: offlineStore,
+		fanout:       fanout,
 	}
 }
 
@@ -185,7 +194,8 @@ func (c *Client) handleIncoming(ctx context.Context, raw []byte) {
 	}
 }
 
-// handleMessage persists the message, confirms SENT to the sender, and routes to the recipient.
+// handleMessage persists the message, confirms SENT to the sender, then routes
+// to a single recipient (1:1) or fans out to all group members.
 func (c *Client) handleMessage(ctx context.Context, raw json.RawMessage) {
 	var p MessagePayload
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -198,82 +208,85 @@ func (c *Client) handleMessage(ctx context.Context, raw json.RawMessage) {
 		logger.Log.Error().Err(err).Str("userID", c.userID).Msg("invalid sender UUID")
 		return
 	}
-	recipientUUID, err := uuid.Parse(p.RecipientID)
-	if err != nil {
-		logger.Log.Error().Err(err).Str("recipient_id", p.RecipientID).Msg("invalid recipient UUID")
-		return
-	}
 	clientUUID, err := uuid.Parse(p.ClientID)
 	if err != nil {
 		clientUUID = uuid.New()
 	}
 
-	msg, err := c.msgRepo.Create(ctx, &model.Message{
-		ClientID:    clientUUID,
-		SenderID:    senderUUID,
-		RecipientID: recipientUUID,
-		Body:        p.Content,
-		State:       model.StatePending,
-	})
+	msg := &model.Message{
+		ClientID: clientUUID,
+		SenderID: senderUUID,
+		Body:     p.Content,
+		State:    model.StatePending,
+	}
+
+	if p.GroupID != "" {
+		groupUUID, err := uuid.Parse(p.GroupID)
+		if err != nil {
+			logger.Log.Error().Err(err).Str("group_id", p.GroupID).Msg("invalid group UUID")
+			return
+		}
+		msg.GroupID = &groupUUID
+	} else {
+		recipientUUID, err := uuid.Parse(p.RecipientID)
+		if err != nil {
+			logger.Log.Error().Err(err).Str("recipient_id", p.RecipientID).Msg("invalid recipient UUID")
+			return
+		}
+		msg.RecipientID = recipientUUID
+	}
+
+	saved, err := c.msgRepo.Create(ctx, msg)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("failed to save message")
 		return
 	}
 
-	_, _ = c.stateService.Transition(ctx, msg.ID.String(), service.StateSent)
-
-	// sentAck, _ := json.Marshal(Envelope{
-	// 	Type: "state_update",
-	// 	Payload: mustMarshal(StateUpdatePayload{
-	// 		MessageID: msg.ID.String(),
-	// 		ClientID:  clientUUID.String(),
-	// 		State:     service.StateSent,
-	// 	}),
-	// })
+	_, _ = c.stateService.Transition(ctx, saved.ID.String(), service.StateSent)
 	c.sendJSON("state_update", StateUpdatePayload{
-		MessageID: msg.ID.String(),
+		MessageID: saved.ID.String(),
 		ClientID:  clientUUID.String(),
 		State:     service.StateSent,
 	})
-	// if err := c.pubsubRepo.Publish(ctx, c.userID, sentAck); err != nil {
-	// 	logger.Log.Error().Err(err).Msg("failed to publish SENT ack")
-	// }
 
+	if p.GroupID != "" {
+		if err := c.fanout.Fanout(ctx, c.userID, saved.ID.String(), p.GroupID, p.Content); err != nil {
+			logger.Log.Error().Err(err).Msg("group fanout failed")
+		}
+		return
+	}
+
+	// 1:1 routing
 	outbound, _ := json.Marshal(Envelope{
 		Type: "message",
 		Payload: mustMarshal(map[string]string{
-			"message_id": msg.ID.String(),
+			"message_id": saved.ID.String(),
 			"sender_id":  c.userID,
 			"content":    p.Content,
 		}),
 	})
 
-	recipientID := msg.RecipientID.String()
+	recipientID := saved.RecipientID.String()
 	if c.hub.IsOnline(recipientID) {
 		if err := c.pubsubRepo.Publish(ctx, recipientID, outbound); err != nil {
 			logger.Log.Warn().Err(err).Str("recipient", recipientID).Msg("pub/sub failed, falling back to offline buffer")
-			if err := c.offlineStore.Push(ctx, recipientID, msg); err != nil {
+			if err := c.offlineStore.Push(ctx, recipientID, saved); err != nil {
 				logger.Log.Error().Err(err).Str("recipient", recipientID).Msg("failed to buffer offline message")
 			}
 		}
 	} else {
-		if err := c.offlineStore.Push(ctx, recipientID, msg); err != nil {
+		if err := c.offlineStore.Push(ctx, recipientID, saved); err != nil {
 			logger.Log.Error().Err(err).Str("recipient", recipientID).Msg("failed to buffer offline message")
 		}
 	}
 }
 
-// handleAck transitions the message to DELIVERED and notifies the original sender.
+// handleAck transitions the message to DELIVERED.
+// For group messages delegates to the fanout engine; for 1:1 notifies the sender.
 func (c *Client) handleAck(ctx context.Context, raw json.RawMessage) {
 	var p AckPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
 		logger.Log.Error().Err(err).Msg("bad ack payload")
-		return
-	}
-
-	newState, err := c.stateService.Transition(ctx, p.MessageID, service.StateDelivered)
-	if err != nil && !errors.Is(err, service.ErrStaleTransition) {
-		logger.Log.Error().Err(err).Msg("ack transition failed")
 		return
 	}
 
@@ -289,6 +302,20 @@ func (c *Client) handleAck(ctx context.Context, raw json.RawMessage) {
 		return
 	}
 
+	if msg.GroupID != nil {
+		if err := c.fanout.HandleMemberACK(ctx, p.MessageID, c.userID, msg.SenderID.String(), int16(service.StateDelivered)); err != nil {
+			logger.Log.Error().Err(err).Msg("group member ACK failed")
+		}
+		return
+	}
+
+	// 1:1 path
+	newState, err := c.stateService.Transition(ctx, p.MessageID, service.StateDelivered)
+	if err != nil && !errors.Is(err, service.ErrStaleTransition) {
+		logger.Log.Error().Err(err).Msg("ack transition failed")
+		return
+	}
+
 	outbound, _ := json.Marshal(Envelope{
 		Type: "state_update",
 		Payload: mustMarshal(StateUpdatePayload{
@@ -301,7 +328,8 @@ func (c *Client) handleAck(ctx context.Context, raw json.RawMessage) {
 	}
 }
 
-// handleRead transitions each message to READ and notifies the original sender.
+// handleRead transitions each message to READ.
+// For group messages delegates to the fanout engine; for 1:1 notifies the sender.
 func (c *Client) handleRead(ctx context.Context, raw json.RawMessage) {
 	var p ReadPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -310,12 +338,6 @@ func (c *Client) handleRead(ctx context.Context, raw json.RawMessage) {
 	}
 
 	for _, msgIDStr := range p.MessageIDs {
-		newState, err := c.stateService.Transition(ctx, msgIDStr, service.StateRead)
-		if err != nil && !errors.Is(err, service.ErrStaleTransition) {
-			logger.Log.Error().Err(err).Str("message_id", msgIDStr).Msg("read transition failed")
-			continue
-		}
-
 		msgUUID, err := uuid.Parse(msgIDStr)
 		if err != nil {
 			logger.Log.Error().Err(err).Str("message_id", msgIDStr).Msg("invalid message UUID in read")
@@ -325,6 +347,20 @@ func (c *Client) handleRead(ctx context.Context, raw json.RawMessage) {
 		msg, err := c.msgRepo.GetByID(ctx, msgUUID)
 		if err != nil {
 			logger.Log.Error().Err(err).Str("message_id", msgIDStr).Msg("failed to fetch message for read")
+			continue
+		}
+
+		if msg.GroupID != nil {
+			if err := c.fanout.HandleMemberACK(ctx, msgIDStr, c.userID, msg.SenderID.String(), int16(service.StateRead)); err != nil {
+				logger.Log.Error().Err(err).Str("message_id", msgIDStr).Msg("group member read ACK failed")
+			}
+			continue
+		}
+
+		// 1:1 path
+		newState, err := c.stateService.Transition(ctx, msgIDStr, service.StateRead)
+		if err != nil && !errors.Is(err, service.ErrStaleTransition) {
+			logger.Log.Error().Err(err).Str("message_id", msgIDStr).Msg("read transition failed")
 			continue
 		}
 
@@ -401,4 +437,3 @@ func mustMarshal(v any) json.RawMessage {
 	}
 	return data
 }
-
