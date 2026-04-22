@@ -4,15 +4,15 @@ A production-grade real-time messaging backend in **Go**, built from scratch to 
 
 ---
 
+## Demo
+
+https://github.com/user-attachments/assets/f0fc6220-8eb5-4176-a998-86562767db24
+
 ## Architecture
 
 ![System Architecture](diagram-export-22-04-2026-00_49_25.svg)
 
-## Demo
 
-https://github.com/user-attachments/assets/screen-recording-2026-04-22
-
-> Screen Recording: `Screen Recording 2026-04-22 at 9.46.09 AM.mov`
 
 ---
 
