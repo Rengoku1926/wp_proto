@@ -57,6 +57,10 @@ func (s *UserService) GetUser(ctx context.Context, id uuid.UUID) (*model.User, e
 	return user, nil
 }
 
+func (s *UserService) ListUsers(ctx context.Context) ([]*model.User, error) {
+	return s.repo.List(ctx)
+}
+
 func (s *UserService) GetUserByUsername(ctx context.Context, username string) (*model.User, error){
 	user, err := s.repo.GetByUsername(ctx, username)
 	if err != nil{

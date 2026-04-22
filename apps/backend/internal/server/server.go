@@ -49,6 +49,8 @@ func (s *Server) RegisterRoutes() {
 	userHandler := handler.NewUserHandler(userService)
 
 	s.mux.HandleFunc("POST /api/users", userHandler.HandleRegister)
+	s.mux.HandleFunc("GET /api/users", userHandler.HandleListUsers)
+	s.mux.HandleFunc("GET /api/users/search", userHandler.HandleGetByUsername)
 	s.mux.HandleFunc("GET /api/users/{id}", userHandler.HandleGetUserById)
 
 	msgRepo := repository.NewMessageRepo(s.pool)
@@ -70,6 +72,11 @@ func (s *Server) RegisterRoutes() {
 	s.mux.HandleFunc("POST /api/groups", groupHandler.CreateGroup)
 	s.mux.HandleFunc("POST /api/groups/{id}/members", groupHandler.AddMember)
 	s.mux.HandleFunc("GET /api/groups/{id}/members", groupHandler.ListMembers)
+
+	messageSvc := service.NewMessageService(msgRepo)
+	messageHandler := handler.NewMessageHandler(messageSvc)
+	s.mux.HandleFunc("GET /api/messages/dm/{user_id}", messageHandler.GetConversationHistory)
+	s.mux.HandleFunc("GET /api/messages/group/{group_id}", messageHandler.GetGroupHistory)
 }
 
 func (s *Server) Start() error {

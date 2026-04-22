@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/errs"
+	"github.com/Rengoku1926/wp_proto/apps/backend/internal/model"
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/service"
 	"github.com/google/uuid"
 )
@@ -39,6 +40,36 @@ func (h *UserHandler) HandleRegister(w http.ResponseWriter, r *http.Request){
         return
     }
 	writeJSON(w, http.StatusCreated, user)
+}
+
+func (h *UserHandler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := h.userService.ListUsers(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+	if users == nil {
+		users = []*model.User{}
+	}
+	writeJSON(w, http.StatusOK, users)
+}
+
+func (h *UserHandler) HandleGetByUsername(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "username query param required"})
+		return
+	}
+	user, err := h.userService.GetUserByUsername(r.Context(), username)
+	if err != nil {
+		if errors.Is(err, errs.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, errorResponse{Error: "user not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
 }
 
 func (h *UserHandler) HandleGetUserById(w http.ResponseWriter, r *http.Request) {

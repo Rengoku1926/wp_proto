@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Rengoku1926/wp_proto/apps/backend/internal/model"
 	"github.com/google/uuid"
@@ -84,4 +85,81 @@ func (r *MessageRepo) UpdateState(ctx context.Context, id uuid.UUID, state model
 		return fmt.Errorf("message %s not found ", id)
 	}
 	return nil
+}
+
+func (r *MessageRepo) GetConversationHistory(
+	ctx context.Context,
+	userID uuid.UUID,
+	otherUserID uuid.UUID,
+	cursor time.Time,
+	limit int,
+) ([]model.Message, error) {
+	query := `
+		SELECT id, client_id, sender_id, recipient_id, group_id, body, state, created_at, updated_at
+		FROM messages
+		WHERE (
+			(sender_id = $1 AND recipient_id = $2)
+			OR
+			(sender_id = $2 AND recipient_id = $1)
+		)
+		AND created_at < $3
+		ORDER BY created_at DESC
+		LIMIT $4
+	`
+
+	rows, err := r.pool.Query(ctx, query, userID, otherUserID, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []model.Message
+	for rows.Next() {
+		var msg model.Message
+		if err := rows.Scan(
+			&msg.ID, &msg.ClientID, &msg.SenderID, &msg.RecipientID,
+			&msg.GroupID, &msg.Body, &msg.State, &msg.CreatedAt, &msg.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
+
+	return messages, rows.Err()
+}
+
+func (r *MessageRepo) GetGroupHistory(
+	ctx context.Context,
+	groupID uuid.UUID,
+	cursor time.Time,
+	limit int,
+) ([]model.Message, error) {
+	query := `
+		SELECT id, client_id, sender_id, recipient_id, group_id, body, state, created_at, updated_at
+		FROM messages
+		WHERE group_id = $1
+		AND created_at < $2
+		ORDER BY created_at DESC
+		LIMIT $3
+	`
+
+	rows, err := r.pool.Query(ctx, query, groupID, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []model.Message
+	for rows.Next() {
+		var msg model.Message
+		if err := rows.Scan(
+			&msg.ID, &msg.ClientID, &msg.SenderID, &msg.RecipientID,
+			&msg.GroupID, &msg.Body, &msg.State, &msg.CreatedAt, &msg.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
+
+	return messages, rows.Err()
 }

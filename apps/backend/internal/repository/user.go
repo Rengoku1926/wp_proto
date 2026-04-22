@@ -55,6 +55,24 @@ func (r *UserRepository) GetById(ctx context.Context, id uuid.UUID) (*model.User
 	return user, nil
 }
 
+func (r *UserRepository) List(ctx context.Context) ([]*model.User, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, username, created_at FROM users ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*model.User
+	for rows.Next() {
+		u := &model.User{}
+		if err := rows.Scan(&u.ID, &u.Username, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*model.User, error){
 	user := &model.User{}
 
